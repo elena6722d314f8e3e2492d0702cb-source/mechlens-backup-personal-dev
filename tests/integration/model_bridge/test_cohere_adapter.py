@@ -6,11 +6,8 @@ Model: trl-internal-testing/tiny-CohereForCausalLM
   - logit_scale=0.125 (canonical Command-R is 0.0625; tiny diverges so
     regression tests catch silent-fallback bugs in the passthrough)
 
-NOTE: The tiny model has use_qk_norm=False, so QK-norm is not exercised here.
-Cohere's QK-norm is a per-head LayerNorm inside CohereAttention.forward; it is
-handled via HF delegation (PositionEmbeddingsAttentionBridge calls the original
-CohereAttention.forward directly), so functional correctness for that path relies
-on the same delegation mechanism verified in test_forward_matches_hf.
+QK norm and repeated processing are covered offline in the acceptance suite.
+
 """
 
 from typing import Any
@@ -36,12 +33,7 @@ def cohere_bridge():
 
 @pytest.fixture(scope="module")
 def cohere_bridge_processed():
-    """Bridge with preprocess_weights applied (fold only, no centering).
-
-    process_weights must be called explicitly — boot_transformers does not call
-    it automatically. We disable all ProcessWeights options so only the adapter's
-    preprocess_weights (logit_scale fold + untie) runs.
-    """
+    """Bridge with adapter preprocessing applied and standard transforms disabled."""
     bridge = TransformerBridge.boot_transformers(MODEL, device="cpu")
     bridge.process_weights(
         fold_ln=False,
@@ -56,7 +48,9 @@ def cohere_bridge_processed():
 @pytest.fixture(scope="module")
 def cohere_hf() -> Any:
     """Load the raw HF model for side-by-side comparisons."""
-    return AutoModelForCausalLM.from_pretrained(MODEL).eval()
+    return AutoModelForCausalLM.from_pretrained(
+        MODEL, dtype=torch.float32, attn_implementation="eager"
+    ).eval()
 
 
 # ---------------------------------------------------------------------------
@@ -168,101 +162,25 @@ class TestCohereForwardEquivalence:
 
 
 class TestCohereLogitScaleEndToEnd:
-    """Verify logit_scale is correctly folded into the loaded model.
+    """Processing must not apply the HF forward's logit scale a second time."""
 
-    process_weights must be called before the fold takes effect — boot_transformers
-    alone does NOT call process_weights. cohere_bridge_processed uses a fixture that
-    calls process_weights with all standard options disabled so only preprocess_weights
-    (the logit_scale fold) runs.
-    """
-
-    def test_unembed_weight_is_scaled_relative_to_hf(
-        self, cohere_bridge_processed: TransformerBridge, cohere_hf: Any
-    ) -> None:
-        # After preprocess_weights, lm_head.weight inside the bridge should equal
-        # HF lm_head.weight * logit_scale (both [d_vocab, d_model]).
-        logit_scale = getattr(cohere_bridge_processed.cfg, "logit_scale")
-        tl_weight = cohere_bridge_processed.unembed.original_component.weight  # [d_vocab, d_model]
-        hf_weight = cohere_hf.lm_head.weight.detach()  # [d_vocab, d_model]
-        expected = hf_weight * logit_scale
-        max_diff = (tl_weight - expected).abs().max().item()
-        assert max_diff < 1e-5, (
-            f"unembed.weight not correctly scaled: max_diff={max_diff:.6f}, "
-            f"logit_scale={logit_scale}"
+    def test_unembed_weight_stays_unscaled(self, cohere_bridge_processed, cohere_hf):
+        torch.testing.assert_close(
+            cohere_bridge_processed.unembed.original_component.weight,
+            cohere_hf.lm_head.weight,
         )
 
-    def test_logit_scale_folded_not_applied_twice(
-        self, cohere_bridge: TransformerBridge, cohere_hf: Any
-    ) -> None:
-        """Confirm logit_scale isn't double-applied.
+    def test_processed_logits_match_hf(self, cohere_bridge_processed, cohere_hf):
+        tokens = torch.tensor([[1, 7, 3, 9, 6, 12]])
+        with torch.inference_mode():
+            expected = cohere_hf(tokens, use_cache=False).logits
+            actual = cohere_bridge_processed(tokens, use_cache=False)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=1e-4)
 
-        The bridge (before process_weights) delegates to HF's forward, which includes
-        the logit_scale multiply. If forward still matches HF, the fold hasn't been
-        applied a second time on top of HF's own scale.
-        """
-        tokens = torch.tensor([[1, 2, 3, 4]])
-        with torch.no_grad():
-            bridge_out = cohere_bridge(tokens)
-            hf_out = cohere_hf(tokens).logits
-        # If logit_scale were applied twice, outputs would differ by a factor of 16
-        max_diff = (bridge_out - hf_out).abs().max().item()
-        assert max_diff < 1e-4, f"Possible double-application of logit_scale; diff={max_diff:.6f}"
-
-
-# ---------------------------------------------------------------------------
-# 4. Tied embedding preserved — embed.W_E must NOT be scaled
-# ---------------------------------------------------------------------------
-
-
-class TestCohereTiedEmbedding:
-    """Verify preprocess_weights does not corrupt embed.W_E in the tied case.
-
-    Both tests use cohere_bridge_processed (process_weights called with fold-only
-    options) because the untie + fold only happens inside process_weights.
-    """
-
-    def test_embed_weight_equals_hf_embed_tokens(
-        self, cohere_bridge_processed: TransformerBridge, cohere_hf: Any
-    ) -> None:
-        # After the fold, embed.W_E must still equal HF's unscaled embed_tokens.weight.
-        # If the fold corrupted embed (in-place on the shared tensor), this fails.
-        hf_embed = cohere_hf.model.embed_tokens.weight.detach()  # [d_vocab, d_model]
-        tl_embed = cohere_bridge_processed.embed.W_E  # [d_vocab, d_model]
-        max_diff = (tl_embed - hf_embed).abs().max().item()
-        assert (
-            max_diff < 1e-6
-        ), f"embed.W_E was corrupted (possibly by logit_scale fold): max_diff={max_diff:.6f}"
-
-    @pytest.mark.parametrize("logit_scale", [0.0625, 1.0])
-    def test_embed_and_unembed_weights_differ(self, logit_scale: float) -> None:
-        # After the logit_scale fold, embed.W_E and unembed.weight must NOT be
-        # identical for a non-trivial scale. logit_scale=1.0 is kept as a regression
-        # guard for the no-op case, where the two weights stay tied.
-        #
-        # cfg.logit_scale is set before process_weights so the fold (which reads it
-        # inside preprocess_weights) runs with the parametrized value.
-        bridge = TransformerBridge.boot_transformers(MODEL, device="cpu")
-        bridge.cfg.logit_scale = logit_scale  # type: ignore[attr-defined]
-        bridge.process_weights(
-            fold_ln=False,
-            center_writing_weights=False,
-            center_unembed=False,
-            fold_value_biases=False,
-            refactor_factored_attn_matrices=False,
+    def test_embed_weight_is_preserved(self, cohere_bridge_processed, cohere_hf):
+        torch.testing.assert_close(
+            cohere_bridge_processed.embed.W_E, cohere_hf.model.embed_tokens.weight
         )
-        tl_embed = bridge.embed.W_E
-        tl_unembed = bridge.unembed.original_component.weight
-        weights_identical = torch.allclose(tl_embed, tl_unembed)
-        if logit_scale == 1.0:
-            assert weights_identical, (
-                "embed.W_E and unembed.weight should remain tied when logit_scale=1.0 "
-                "(the fold is a no-op)"
-            )
-        else:
-            assert not weights_identical, (
-                "embed.W_E and unembed.weight are identical — "
-                "logit_scale fold may not have been applied or untied correctly"
-            )
 
 
 # ---------------------------------------------------------------------------

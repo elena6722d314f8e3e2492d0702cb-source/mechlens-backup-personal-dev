@@ -94,6 +94,7 @@ jobs:
             ~/.cache/huggingface/hub/models--ArthurConmy--redwood_attn_2l
             ~/.cache/huggingface/hub/models--stas--tiny-random-llama-2
             ~/.cache/huggingface/hub/models--microsoft--DialoGPT-medium
+            ~/.cache/huggingface/hub/models--trl-internal-testing--tiny-CohereForCausalLM
           key: ${{ runner.os }}-huggingface-models-v4
           restore-keys: |
             ${{ runner.os }}-huggingface-models-v2
@@ -114,6 +115,8 @@ jobs:
           HF_TOKEN:  ${{ secrets.HF_TOKEN }}
       - name: Acceptance Test
         run: make acceptance-test
+      - name: Command-R checkpoint parity
+        run: uv run pytest tests/acceptance/model_bridge/test_command_r.py
       - name: Build check
         run: uv build
 

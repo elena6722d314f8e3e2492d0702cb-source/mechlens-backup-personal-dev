@@ -63,7 +63,7 @@ class MyArchitectureAdapter(ArchitectureAdapter):
 Optional overrides on the class:
 
 - `default_cfg` — class-level defaults merged into the runtime config
-- `preprocess_weights()` — pre-load weight transforms (e.g. Gemma embedding scaling, Cohere `logit_scale` fold). See [When to override `preprocess_weights`](#when-to-override-preprocess_weights).
+- `preprocess_weights()` — architecture-specific weight transforms. See [When to override `preprocess_weights`](#when-to-override-preprocess_weights).
 - `applicable_phases` — subset of `[1, 2, 3, 4, 7, 8]` (default `[1, 2, 3, 4]`); see [tools/model_registry/AGENTS.md](../../tools/model_registry/AGENTS.md) for what each phase tests
 - `supports_generation` — set `False` for encoder-only models (BERT, HuBERT)
 
@@ -99,15 +99,15 @@ HF raw config attributes are invisible to TL-side consumers unless propagated to
 | `sliding_window` | `self.cfg.sliding_window` | Mistral, Qwen2, Gemma2 — local-attention layers |
 | `layer_types` | `self.cfg.layer_types` | Hybrid models with per-layer attention type lists |
 
-**Weight-fold attributes** (need BOTH surface-on-cfg AND fold-into-weight via `preprocess_weights` — see [the next section](#when-to-override-preprocess_weights)):
+**Numerical attributes** (surface on cfg, then check whether the live forward already applies them before folding into weights):
 
 | HF attribute | Fold target | Used by |
 |---|---|---|
-| `logit_scale` | `unembed.weight` (multiply in fp32 then cast back) | Cohere — final logits scaled by `1/16` |
+| `logit_scale` | No fold: outer HF forward applies it in all modes | Cohere — final logits scaled by `1/16` |
 | `embedding_multiplier` / embed-scale flags | `embed.weight` (multiply) | Gemma — embeddings scaled by `√d_model` |
 | Tied unembed with extra scale | `unembed.weight` | T5-family tied projection variants |
 
-Rule of thumb: if the model card or HF source mentions a numerical knob, assume it needs to land on `self.cfg`. If that knob changes weights or final outputs and HF's forward applies it natively, you ALSO need a `preprocess_weights` override or compatibility mode will diverge.
+Rule of thumb: if the model card or HF source mentions a numerical knob, assume it needs to land on `self.cfg`. If HF forward already applies that knob, do not fold it again. Verify raw, processed, and compatibility paths against an independent HF reference.
 
 **Passthrough gotcha:** if your attr is NOT a declared `TransformerBridgeConfig` field, `TransformerBridgeConfig.from_dict(hf_config)` silently filters it out — `getattr(cfg, "<attr>", None)` in your adapter will return `None` and your fallback default fires regardless of the model's actual value. To propagate, add the attr name to `_HF_PASSTHROUGH_ATTRS` in [`sources/transformers.py`](../sources/transformers.py) (and the duplicate list in [`sources/_bridge_builder.py`](../sources/_bridge_builder.py)). Verify with an integration-test assertion: `assert bridge.cfg.<attr> == hf_model.config.<attr>`.
 
@@ -115,13 +115,13 @@ Rule of thumb: if the model card or HF source mentions a numerical knob, assume 
 
 ## When to override `preprocess_weights`
 
-Default is a no-op pass-through. Override when a numerical op HF applies natively in forward must also be baked into raw weights — otherwise `bridge.enable_compatibility_mode()` (which calls `process_weights` expecting the math to already be in the weights) diverges.
+Default is a no-op pass-through. Override only when a transformation is required by the live Bridge computation. Compatibility mode still calls the outer HF forward; it does not automatically remove native numerical operations.
 
-> **Trigger:** if a config attr changes the forward-pass math AND isn't re-applied by compat-mode weight processing, fold it into the relevant weight in `preprocess_weights()`.
+> **Trigger:** first demonstrate a numerical mismatch against HF. Fold only if the live forward no longer applies the operation, and test repeated processing to catch compounded scaling.
 
 Examples:
 
-- **Cohere** — `cfg.logit_scale` (default `0.0625`) folds into `unembed.weight`. HF forward multiplies logits by `logit_scale`; compat-mode doesn't.
+- **Cohere** — leave weights unscaled. HF forward multiplies logits by `logit_scale` in raw and compatibility modes. Folding it into `unembed.weight` would apply the scale twice.
 - **Gemma1/2/3** — embedding scale (`√d_model`) folds into `embed.weight`. HF's `GemmaTextScaledWordEmbedding` scales on forward; compat-mode reads raw.
 
 Skeleton:
@@ -144,7 +144,7 @@ def preprocess_weights(self, state_dict: dict[str, torch.Tensor]) -> dict[str, t
     return state_dict
 ```
 
-**Skip the override when:** the op lives inside an HF submodule the bridge delegates to (e.g. RoPE inside `CohereRotaryEmbedding`) — HF forward applies it on both paths, parity is free.
+**Skip the override when:** HF forward already applies the operation. Do not assume attention is delegated: `PositionEmbeddingsAttentionBridge` reconstructs it, so adapters must declare QK norms and the rotary pairing convention. Verify parity at nonzero positions.
 
 **Verification:** a missing fold degrades Phase 4 (text-generation), and Phase 3 if severe enough to trip the strict gate. P4's 50% bar is intentionally lenient, so sub-100% P4 on a small parity-test model is worth investigating even with `STATUS_VERIFIED`. See [tools/model_registry/AGENTS.md §Phase-score thresholds](../../tools/model_registry/AGENTS.md#phase-score-thresholds).
 
