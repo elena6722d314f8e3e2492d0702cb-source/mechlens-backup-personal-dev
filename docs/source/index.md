@@ -25,6 +25,7 @@ The core features were heavily inspired by the interface to [Anthropic's excelle
 :caption: Introduction
 
 content/getting_started
+content/command_r
 content/getting_started_mech_interp
 content/gallery
 ```

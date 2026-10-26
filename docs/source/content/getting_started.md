@@ -68,3 +68,9 @@ export TRANSFORMERLENS_ALLOW_MPS=1
 ## Huggingface Gated Access
 
 For convenience, gated-model access depends only on `HF_TOKEN` above. Once you have set the token and accepted any model-specific agreements on the HuggingFace Hub, gated models load through TransformerLens with no additional configuration. The most popular gated families supported by TransformerLens are the Llama, Mistral/Mixtral, and Gemma models.
+
+## Command-R
+
+See the [Command-R guide](command_r.md) for the Bridge loading API, supported
+architecture, and the distinction between implemented support and unverified
+pretrained-checkpoint acceptance.
