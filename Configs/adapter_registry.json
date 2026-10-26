@@ -1,0 +1,132 @@
+{
+  "note": "snapshot of the model-adapter registry (families -> flags)",
+  "families": [
+    {
+      "name": "gpt2",
+      "attention": "MHA",
+      "rope": "none",
+      "tied": false
+    },
+    {
+      "name": "pythia",
+      "attention": "MHA",
+      "rope": "partial",
+      "tied": false
+    },
+    {
+      "name": "llama-2",
+      "attention": "MHA",
+      "rope": "rope",
+      "tied": false
+    },
+    {
+      "name": "llama-3",
+      "attention": "GQA",
+      "rope": "scaled",
+      "tied": false
+    },
+    {
+      "name": "llama-4",
+      "attention": "GQA",
+      "rope": "scaled+nope",
+      "tied": false,
+      "since": "2.14.0"
+    },
+    {
+      "name": "qwen-2.5",
+      "attention": "GQA",
+      "rope": "rope",
+      "tied": true
+    },
+    {
+      "name": "qwen-2.5-vl",
+      "attention": "GQA",
+      "rope": "mrope(text)",
+      "tied": true,
+      "since": "2.12.0",
+      "scope": "text-stack only"
+    },
+    {
+      "name": "qwen-3",
+      "attention": "GQA",
+      "rope": "rope",
+      "tied": true,
+      "since": "2.13.0",
+      "extra": "qk-norm"
+    },
+    {
+      "name": "mistral-small-3",
+      "attention": "GQA+SWA",
+      "rope": "rope",
+      "tied": false,
+      "since": "2.13.0"
+    },
+    {
+      "name": "gemma-2",
+      "attention": "GQA",
+      "rope": "rope",
+      "tied": true,
+      "extra": "logit-softcap"
+    },
+    {
+      "name": "gemma-3",
+      "attention": "GQA local/global",
+      "rope": "dual-theta",
+      "tied": true,
+      "since": "2.16.0",
+      "extra": "norm-eps inside rsqrt (fixed 2.16.1); input embedding scaled by sqrt(d_model)"
+    },
+    {
+      "name": "phi-3",
+      "attention": "MHA",
+      "rope": "partial",
+      "tied": false
+    },
+    {
+      "name": "gpt-neox",
+      "attention": "MHA",
+      "rope": "partial",
+      "tied": false,
+      "extra": "parallel attn/mlp"
+    },
+    {
+      "name": "command-r",
+      "architecture": "CohereForCausalLM",
+      "adapter": "CohereArchitectureAdapter",
+      "scope": "TransformerBridge; does not include Cohere2ForCausalLM or Cohere2MoeForCausalLM",
+      "implementation": {
+        "status": "implemented",
+        "branch": "fix/command-r-release-readiness",
+        "source": "transformer_lens/model_bridge/supported_architectures/cohere.py",
+        "features": [
+          "adjacent-pair rotary embeddings",
+          "optional per-head Q/K normalization",
+          "HF logit scaling applied once"
+        ],
+        "offline_acceptance": {
+          "status": "passed",
+          "test": "tests/acceptance/model_bridge/test_cohere_processing.py",
+          "cohere_cases_passed": 24,
+          "note": "Synthetic random HF models: 18 raw-logit comparisons at atol=1e-4, rtol=0; 6 default compatibility cases compare log_softmax. These are not pretrained-checkpoint acceptance."
+        }
+      },
+      "checkpoint_acceptance": {
+        "status": "unverified",
+        "test": "tests/acceptance/model_bridge/test_command_r.py",
+        "checkpoint": "trl-internal-testing/tiny-CohereForCausalLM",
+        "reference": "Hugging Face",
+        "dtype": "float32",
+        "required_max_abs_logit_diff": 0.0001,
+        "comparison": "strictly less than",
+        "observed_max_abs_logit_diff": null,
+        "last_attempt": "setup_error",
+        "blocker": "RuntimeError: Failed to initialize cpuinfo! during checkpoint fp16-to-fp32 conversion in the sandbox.",
+        "note": "No verified pretrained tiny-checkpoint or full-size Command-R parity result for the current fix. Release acceptance remains pending a successful checkpoint run."
+      },
+      "attention": "MHA/GQA (checkpoint-dependent)",
+      "rope": "adjacent-pair rotary",
+      "tied": true,
+      "extra": "Tied embeddings by default; checkpoint configuration determines weight tying. Optional Q/K normalization and logit scaling."
+    }
+  ]
+}
