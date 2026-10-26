@@ -62,7 +62,7 @@ After `enable_compatibility_mode()`, these HT hook names fire on the **pre-norm 
 **Carve-outs** ([issue #1317](https://github.com/TransformerLensOrg/TransformerLens/issues/1317)):
 
 - **Post-norm architectures** (OLMo 2, BERT-style) read the **post-attention residual** instead, because the norm semantically lives elsewhere in the block.
-- **MLA blocks** (DeepSeek V2 / V3 / R1) do **not** expose the split-qkv aliases — MLA's compressed K/V doesn't have a clean split.
+- **MLA blocks** (DeepSeek V2 / V3 / full R1) do **not** expose the split-qkv aliases — MLA's compressed K/V doesn't have a clean split. R1 distillations use their underlying Llama/Qwen adapters, not the V3 MLA adapter; see [DeepSeek support](deepseek.md).
 
 An adapter author for a new post-norm or MLA-style architecture must handle these carve-outs in `setup_hook_compatibility`. The Gemma1/Gemma2 adapters are exemplars of when **not** to override `setup_hook_compatibility` — `GemmaTextScaledWordEmbedding` already scales internally, so any added `hook_conversion` would double-scale `embed.hook_out`.
 

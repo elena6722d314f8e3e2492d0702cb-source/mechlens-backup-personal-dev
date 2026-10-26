@@ -25,6 +25,8 @@ TransformerBridge inverts this. Instead of reimplementing models, the bridge kee
 
 The numbers tell the story. At the time of the 2.0 release, TransformerLens supported roughly two dozen model families. TransformerBridge ships with support for **48 architectures**, spanning Llama, Mistral, Mixtral, Qwen, Gemma, OLMo, Phi, Granite, Cohere, DeepSeek, Mamba (state-space), LLaVA (multimodal), and many more. The full compatibility matrix - including which models have been verified end to end - is available on the new [TransformerBridge Models](../../generated/transformer_bridge_models.md) page.
 
+For DeepSeek, implemented V2 and V3 adapters cover full R1 through the V3 architecture; R1 distillations use their underlying Llama/Qwen adapters. This architecture coverage is not a checkpoint acceptance claim. See [DeepSeek support](../deepseek.md) for the mappings and current verification limits.
+
 For a complete migration guide with side-by-side examples, see [Migrating to TransformerLens 3](../migrating_to_v3.md).
 
 ## Breaking changes and deprecations
